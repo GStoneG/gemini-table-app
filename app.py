@@ -9,6 +9,50 @@ import os
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
+# === БЛОК РАБОТЫ С НАСТРОЙКАМИ (ФАЙЛ CONFIG) ===
+CONFIG_FILE = "app_config.json"
+
+# Оригинальные дефолтные настройки приложения
+DEFAULT_CONFIG = {
+    "gemini_api_key": "Вставьте API токен Gemini",
+    "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
+    "worksheet_name": "Лоты",
+    "url_column": 32,
+    "out_column": 12,
+    "model_name": "gemini-2.5-flash",
+    "system_prompt": (
+        "Ты — первоклассный эксперт по компьютерному аппаратному обеспечению и архитектуре процессоров. "
+        "Твоя главная задача — проанализировать числовые параметры процессора из текста госзакупок "
+        "(количество ядер, потоков, базовую и максимальную частоту, кэш, шину, частоту встроенной графики) "
+        "и на основе этих данных определить и написать ТОЧНУЮ КОММЕРЧЕСКУЮ МОДЕЛЬ ПРОЦЕССОРА (например, 'Intel Core i5-11400' или 'Intel Core i5-10400'). "
+        "В тексте спецификаций модели намеренно скрывают за фразами 'не менее', но ты обязан вычислить конкретную модель на рынке, которая идеально подпадает под эти характеристики. "
+        "Строго запрещено писать сухие параметры вроде 'не менее 6 ядер' или 'Не указано' в поле 'cpu', если в тексте есть частоты и ядра. "
+        "Возвращай результат СТРОГО в формате JSON без комментариев и без разметки markdown (без ```json)."
+    ),
+    "prompt_text": """Проанализируй текст спецификации и заполни следующие поля в формате JSON.
+Используй свои глубокие знания о процессорах Intel и AMD, чтобы сопоставить частоты и ядра с конкретным рыночным названием процессора.
+
+{
+  "type": "Тип устройства (например: Моноблок, Ноутбук, Компьютер в комплекте)",
+  "cpu": "Точная модель процессора, которую ты определил по характеристикам (например: Intel Core i5-11400)",
+  "ram": "Объем и тип памяти (например: 16 ГБ DDR4)",
+  "storage": "Накопитель (например: 512 ГБ SSD)",
+  "gpu": "Видеокарта",
+  "screen": "Экран (Диагональ, разрешение, тип матрицы)",
+  "os": "Операционная система",
+  "peripherals": "Периферия и доп. устройства (Клавиатура, мышь, наушники, веб-камера, коврик, если есть в тексте)"
+}"""
+}
+
+# Проверка наличия файла. Если нет — создаем с дефолтными настройками
+if not os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=4)
+
+# Загрузка настроек из файла
+with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    user_config = json.load(f)
+
 # ИИнициализация конфигурации страницы
 st.set_page_config(page_title="AI Табличный Парсер", layout="wide", page_icon="📊")
 
@@ -74,48 +118,42 @@ if st.session_state["username"]:
     st.sidebar.markdown("---")
 
 st.sidebar.header("🔑 Настройки доступа")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", value="Вставьте API токен Gemini", type="password")
+gemini_api_key = st.sidebar.text_input("Gemini API Key", value=user_config.get("gemini_api_key"), type="password")
 uploaded_creds = st.sidebar.file_uploader("Загрузите credentials.json (необязательно, если файл лежит в папке скрипта)", type=["json"])
 
 st.header("⚙️ Конфигурация колонок и промтов")
 col1, col2 = st.columns(2)
 with col1:
-    sheet_id = st.text_input("Google Sheet ID", value="13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY")
-    worksheet_name = st.text_input("Название листа", value="Лоты")
+    sheet_id = st.text_input("Google Sheet ID", value=user_config.get("sheet_id"))
+    worksheet_name = st.text_input("Название листа", value=user_config.get("worksheet_name"))
 with col2:
-    url_column = st.number_input("Номер колонки со ссылками на PDF (A=1, B=2...)", min_value=1, value=32)
-    out_column = st.number_input("Номер колонки для вывода результата (A=1, B=2...)", min_value=1, value=12)
+    url_column = st.number_input("Номер колонки со ссылками на PDF (A=1, B=2...)", min_value=1, value=int(user_config.get("url_column")))
+    out_column = st.number_input("Номер колонки для вывода результата (A=1, B=2...)", min_value=1, value=int(user_config.get("out_column")))
 
-model_name = st.selectbox("Версия модели Gemini", ["gemini-2.5-flash", "gemini-2.5-pro"])
+model_options = ["gemini-2.5-flash", "gemini-2.5-pro"]
+saved_model = user_config.get("model_name")
+model_index = model_options.index(saved_model) if saved_model in model_options else 0
+model_name = st.selectbox("Версия модели Gemini", model_options, index=model_index)
 
-# Оригинальные системные инструкции
-default_system_instruction = (
-    "Ты — первоклассный эксперт по компьютерному аппаратному обеспечению и архитектуре процессоров. "
-    "Твоя главная задача — проанализировать числовые параметры процессора из текста госзакупок "
-    "(количество ядер, потоков, базовую и максимальную частоту, кэш, шину, частоту встроенной графики) "
-    "и на основе этих данных определить и написать ТОЧНУЮ КОММЕРЧЕСКУЮ МОДЕЛЬ ПРОЦЕССОРА (например, 'Intel Core i5-11400' или 'Intel Core i5-10400'). "
-    "В тексте спецификаций модели намеренно скрывают за фразами 'не менее', но ты обязан вычислить конкретную модель на рынке, которая идеально подпадает под эти характеристики. "
-    "Строго запрещено писать сухие параметры вроде 'не менее 6 ядер' или 'Не указано' в поле 'cpu', если в тексте есть частоты и ядра. "
-    "Возвращай результат СТРОГО в формате JSON без комментариев и без разметки markdown (без ```json)."
-)
+system_prompt = st.text_area("Системная инструкция (System Instruction)", value=user_config.get("system_prompt"), height=180)
+prompt_text = st.text_area("Основной текст промта (Ожидаемая JSON структура)", value=user_config.get("prompt_text"), height=270)
 
-# Промт обновлен: добавлен пункт "peripherals"
-default_prompt_text = """Проанализируй текст спецификации и заполни следующие поля в формате JSON.
-Используй свои глубокие знания о процессорах Intel и AMD, чтобы сопоставить частоты и ядра с конкретным рыночным названием процессора.
-
-{
-  "type": "Тип устройства (например: Моноблок, Ноутбук, Компьютер в комплекте)",
-  "cpu": "Точная модель процессора, которую ты определил по характеристикам (например: Intel Core i5-11400)",
-  "ram": "Объем и тип памяти (например: 16 ГБ DDR4)",
-  "storage": "Накопитель (например: 512 ГБ SSD)",
-  "gpu": "Видеокарта",
-  "screen": "Экран (Диагональ, разрешение, тип матрицы)",
-  "os": "Операционная система",
-  "peripherals": "Периферия и доп. устройства (Клавиатура, мышь, наушники, веб-камера, коврик, если есть в тексте)"
-}"""
-
-system_prompt = st.text_area("Системная инструкция (System Instruction)", value=default_system_instruction, height=180)
-prompt_text = st.text_area("Основной текст промта (Ожидаемая JSON структура)", value=default_prompt_text, height=270)
+if st.button("💾 Сохранить текущие настройки в файл", use_container_width=True):
+    current_settings = {
+        "gemini_api_key": gemini_api_key,
+        "sheet_id": sheet_id,
+        "worksheet_name": worksheet_name,
+        "url_column": url_column,
+        "out_column": out_column,
+        "model_name": model_name,
+        "system_prompt": system_prompt,
+        "prompt_text": prompt_text
+    }
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(current_settings, f, ensure_ascii=False, indent=4)
+    st.success("✅ Настройки успешно сохранены на вашем компьютере!")
+    time.sleep(1)
+    st.rerun()
 
 st.markdown("---")
 
@@ -187,8 +225,12 @@ if st.session_state["processing"]:
             raw_url_cell = row[url_column - 1] if len(row) >= url_column else ""
             current_result = row[out_column - 1] if len(row) >= out_column else ""
             
-            if raw_url_cell and not current_result.strip():
-                download_url = raw_url_cell.strip()
+            # --- ИСПРАВЛЕНИЕ: Принудительное приведение к str() для защиты от int ячеек ---
+            raw_url_str = str(raw_url_cell).strip()
+            current_result_str = str(current_result).strip()
+            
+            if raw_url_cell and not current_result_str:
+                download_url = raw_url_str
                 
                 if download_url.startswith('='):
                     match = re.search(r'HYPERLINK\(\s*["\']([^"\']+)["\']', download_url, re.IGNORECASE)
@@ -214,7 +256,6 @@ if st.session_state["processing"]:
                                 
                                 data = json.loads(api_res.text)
                                 
-                                # Сборка строки спецификации: добавлено поле Периферия
                                 formatted_str = (
                                     f"Тип: {data.get('type')}; "
                                     f"CPU: {data.get('cpu')}; "
