@@ -1,0 +1,5 @@
+streamlit
+gspread
+google-generativeai
+google-auth
+requests
