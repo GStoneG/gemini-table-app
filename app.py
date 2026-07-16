@@ -9,61 +9,92 @@ import os
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
-# === БЛОК РАБОТЫ С НАСТРОЙКАМИ (ФАЙЛ CONFIG) ===
-CONFIG_FILE = "app_config.json"
+# === БЛОК РАБОТЫ С НАСТРОЙКАМИ И ПРОФИЛЯМИ ===
+CONFIGS_FILE = "app_profiles.json"
 
-# Оригинальные дефолтные настройки приложения
-DEFAULT_CONFIG = {
-    "gemini_api_key": "Вставьте API токен Gemini",
-    "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
-    "worksheet_name": "Лоты",
-    "url_column": 32,
-    "out_column": 12,
-    "model_name": "gemini-2.5-flash",
-    "system_prompt": (
-        "Ты — первоклассный эксперт по компьютерному аппаратному обеспечению и архитектуре процессоров. "
-        "Твоя главная задача — проанализировать числовые параметры процессора из текста госзакупок "
-        "(количество ядер, потоков, базовую и максимальную частоту, кэш, шину, частоту встроенной графики) "
-        "и на основе этих данных определить и написать ТОЧНУЮ КОММЕРЧЕСКУЮ МОДЕЛЬ ПРОЦЕССОРА (например, 'Intel Core i5-11400' или 'Intel Core i5-10400'). "
-        "В тексте спецификаций модели намеренно скрывают за фразами 'не менее', но ты обязан вычислить конкретную модель на рынке, которая идеально подпадает под эти характеристики. "
-        "Строго запрещено писать сухие параметры вроде 'не менее 6 ядер' или 'Не указано' в поле 'cpu', если в тексте есть частоты и ядра. "
-        "Возвращай результат СТРОГО в формате JSON без комментариев и без разметки markdown (без ```json)."
-    ),
-    "prompt_text": """Проанализируй текст спецификации и заполни следующие поля в формате JSON.
-Используй свои глубокие знания о процессорах Intel и AMD, чтобы сопоставить частоты и ядра с конкретным рыночным названием процессора.
-
-{
-  "type": "Тип устройства (например: Моноблок, Ноутбук, Компьютер в комплекте)",
-  "cpu": "Точная модель процессора, которую ты определил по характеристикам (например: Intel Core i5-11400)",
-  "ram": "Объем и тип памяти (например: 16 ГБ DDR4)",
-  "storage": "Накопитель (например: 512 ГБ SSD)",
-  "gpu": "Видеокарта",
-  "screen": "Экран (Диагональ, разрешение, тип матрицы)",
-  "os": "Операционная система",
-  "peripherals": "Периферия и доп. устройства (Клавиатура, мышь, наушники, веб-камера, коврик, если есть в тексте)"
-}"""
+# Дефолтные профили под разные задачи
+DEFAULT_PROFILES = {
+    "Определение Партнеров (Новый)": {
+        "gemini_api_key": "Вставьте API токен Gemini",
+        "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
+        "worksheet_name": "Лоты",
+        "url_column": 32,
+        "out_column": 12,
+        "model_name": "gemini-2.5-flash",
+        "output_template": "Партнер - {partner}",
+        "system_prompt": (
+            "Ты — специализированный ИИ-аналитик по аудиту тендерной документации и спецификаций.\n\n"
+            "Твоя единственная задача — проанализировать текст предоставленного PDF-документа, "
+            "найти в нем присутствие специфических ключевых слов, фраз или тем и на основе этого строго определить Партнера.\n\n"
+            "Правила классификации:\n"
+            "1. 'Заман Эдюкейшен' — если в тексте встречаются темы: Цикл Борна-Габера, Спектроскопия ЯМР, Стеариновая кислота, Реакции нуклеофильного замещения, Сердце человека, Лямблия, Нефрон, Азиатский слон, Фетальная свинья, Движение тел по окружности, Динамика движения тел по окружности, Потенциометр, Планетарная коробка передач.\n"
+            "2. 'Медиа Холл' — если в тексте встречаются темы: Астрономия (Цефеиды, Звездный параллакс, Луноход Аполлон-15), Ботаника (Внутреннее строение листа/стебля), Барометр-анероид, Видикон, Волосной гигрометр, Гигрометр психрометрический, Аллотропные модификации углерода, Бензилпенициллин, Гуанозиндифосфат.\n"
+            "3. 'КазРобоЛаб' — если в тексте встречаются темы: Бицепс, Вены человека, Моногибридное скрещивание, Бабочка Махаон, Вирус Марбург/бешенства, Лошадь, Люцерна, Сальтаторная проводимость, Изохорный процесс, Соленоиды, Спектр электромагнитных волн, Камера Вильсона, Топливная ячейка, Закон Кулона (Крутильные весы).\n\n"
+            "Критически важные правила:\n"
+            "- Обращай внимание на маркерные (уникальные) слова для каждого партнера.\n"
+            "- Если в тексте нет явного упоминания этих специфических учебных тем и терминов, или текст относится к совершенно другой тематике, возвращай строго 'Не определен'.\n"
+            "- Ответ должен быть возвращен СТРОГО в формате JSON, без какого-либо Markdown-форматирования (без ```json), комментариев или объяснений."
+        ),
+        "prompt_text": (
+            "Проанализируй текст загруженного документа. Проверь его на наличие ключевых слов, "
+            "учебных тем или фраз, соответствующих одному из трех партнеров: 'Заман Эдюкейшен', 'Медиа Холл' или 'КазРобоЛаб'.\n\n"
+            "Верни результат строго в формате JSON со следующей структурой:\n"
+            "{\n"
+            "  \"partner\": \"Название определенного партнера (строго один из вариантов: 'Заман Эдюкейшен', 'Медиа Холл', 'КазРобоЛаб'). "
+            "Если совпадений по ключевым паттернам не найдено, запиши 'Не определен'\"\n"
+            "}"
+        )
+    },
+    "Анализ Процессоров (Старый)": {
+        "gemini_api_key": "Вставьте API токен Gemini",
+        "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
+        "worksheet_name": "Лоты",
+        "url_column": 32,
+        "out_column": 12,
+        "model_name": "gemini-2.5-flash",
+        "output_template": "Тип: {type}; CPU: {cpu}; RAM: {ram}; SSD/HDD: {storage}; GPU: {gpu}; Экран: {screen}; ОС: {os}; Периферия: {peripherals}",
+        "system_prompt": (
+            "Ты — первоклассный эксперт по компьютерному аппаратному обеспечению и архитектуре процессоров. "
+            "Твоя главная задача — проанализировать числовые параметры процессора из текста госзакупок "
+            "(количество ядер, потоков, базовую и максимальную частоту, кэш, шину, частоту встроенной графики) "
+            "и на основе этих данных определить и написать ТОЧНУЮ КОММЕРЧЕСКУЮ МОДЕЛЬ ПРОЦЕССОРА (например, 'Intel Core i5-11400' или 'Intel Core i5-10400'). "
+            "В тексте спецификаций модели намеренно скрывают за фразами 'не менее', но ты обязан вычислить конкретную модель на рынке, которая идеально подпадает под эти характеристики. "
+            "Строго запрещено писать сухие параметры вроде 'не менее 6 ядер' или 'Не указано' в поле 'cpu', если в тексте есть частоты и ядра. "
+            "Возвращай результат СТРОГО в формате JSON без комментариев и без разметки markdown (без ```json)."
+        ),
+        "prompt_text": (
+            "Проанализируй текст спецификации и заполни следующие поля в формате JSON.\n"
+            "Используй свои глубокие знания о процессорах Intel и AMD, чтобы сопоставить частоты и ядра с конкретным рыночным названием процессора.\n\n"
+            "{\n"
+            "  \"type\": \"Тип устройства (например: Моноблок, Ноутбук, Компьютер в комплекте)\",\n"
+            "  \"cpu\": \"Точная модель процессора, которую ты определил по характеристикам (например: Intel Core i5-11400)\",\n"
+            "  \"ram\": \"Объем и тип памяти (например: 16 ГБ DDR4)\",\n"
+            "  \"storage\": \"Накопитель (например: 512 ГБ SSD)\",\n"
+            "  \"gpu\": \"Видеокарта\",\n"
+            "  \"screen\": \"Экран (Диагональ, разрешение, тип матрицы)\",\n"
+            "  \"os\": \"Операционная система\",\n"
+            "  \"peripherals\": \"Периферия и доп. устройства (Клавиатура, мышь, наушники, веб-камера, коврик, если есть в тексте)\"\n"
+            "}"
+        )
+    }
 }
 
-# Проверка наличия файла. Если нет — создаем с дефолтными настройками
-if not os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=4)
+# Проверка наличия файла профилей. Если нет — создаем с дефолтными профилями
+if not os.path.exists(CONFIGS_FILE):
+    with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(DEFAULT_PROFILES, f, ensure_ascii=False, indent=4)
 
-# Загрузка настроек из файла
-with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-    user_config = json.load(f)
+# Загрузка профилей из файла
+with open(CONFIGS_FILE, "r", encoding="utf-8") as f:
+    profiles = json.load(f)
 
-# ИИнициализация конфигурации страницы
-st.set_page_config(page_title="AI Табличный Парсер", layout="wide", page_icon="📊")
+# Инициализация конфигурации страницы
+st.set_page_config(page_title="Универсальный AI Табличный Парсер", layout="wide", page_icon="📊")
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def sanitize_string(text):
-    """
-    Функция защиты от умных редакторов кода.
-    Автоматически извлекает чистые строки, если среда разработки превратила их в Markdown.
-    """
     if not isinstance(text, str):
         return text
     text = text.strip()
@@ -71,7 +102,7 @@ def sanitize_string(text):
     if markdown_match:
         return markdown_match.group(1).strip()
     if text.startswith("https://"):
-        url_match = re.search(r'(https://[^\s\'"\]\)]+)', text)
+        url_match = re.search(r'(https://[^\s\'\"\]\)]+)', text)
         if url_match:
             return url_match.group(1).strip()
     return text
@@ -105,7 +136,7 @@ if "users" in st.secrets and not st.session_state["authenticated"]:
     st.stop()
 
 # --- ОСНОВНОЙ ИНТЕРФЕЙС ПОСЛЕ АВТОРИЗАЦИИ ---
-st.title("📊 ИИ Анализатор документов из Google Таблиц")
+st.title("📊 Универсальный ИИ Анализатор документов")
 
 if st.session_state["username"]:
     st.sidebar.header("👤 Аккаунт")
@@ -117,41 +148,83 @@ if st.session_state["username"]:
         st.rerun()
     st.sidebar.markdown("---")
 
+# === УПРАВЛЕНИЕ ПРОФИЛЯМИ В СИДБАРЕ ===
+st.sidebar.header("📂 Профили настроек")
+profile_names = list(profiles.keys())
+selected_profile = st.sidebar.selectbox("Выберите активный профиль", profile_names)
+
+# Возможность создать новый профиль
+new_profile_name = st.sidebar.text_input("➕ Создать новый профиль (введите имя)")
+if st.sidebar.button("Создать профиль", use_container_width=True):
+    if new_profile_name.strip() and new_profile_name not in profiles:
+        # Создаем копию текущего выбранного или пустой шаблон
+        profiles[new_profile_name] = profiles[selected_profile].copy()
+        with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(profiles, f, ensure_ascii=False, indent=4)
+        st.success(f"Профиль '{new_profile_name}' успешно создан!")
+        st.rerun()
+    elif new_profile_name in profiles:
+        st.warning("Профиль с таким именем уже существует!")
+
+# Кнопка удаления профиля
+if len(profiles) > 1:
+    if st.sidebar.button("🗑️ Удалить текущий профиль", type="secondary", use_container_width=True):
+        del profiles[selected_profile]
+        with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(profiles, f, ensure_ascii=False, indent=4)
+        st.success("Профиль успешно удален!")
+        st.rerun()
+
+# Загружаем настройки активного профиля
+active_config = profiles[selected_profile]
+
 st.sidebar.header("🔑 Настройки доступа")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", value=user_config.get("gemini_api_key"), type="password")
+gemini_api_key = st.sidebar.text_input("Gemini API Key", value=active_config.get("gemini_api_key"), type="password")
 uploaded_creds = st.sidebar.file_uploader("Загрузите credentials.json (необязательно, если файл лежит в папке скрипта)", type=["json"])
 
-st.header("⚙️ Конфигурация колонок и промтов")
+st.header(f"⚙️ Конфигурация: {selected_profile}")
 col1, col2 = st.columns(2)
 with col1:
-    sheet_id = st.text_input("Google Sheet ID", value=user_config.get("sheet_id"))
-    worksheet_name = st.text_input("Название листа", value=user_config.get("worksheet_name"))
+    sheet_id = st.text_input("Google Sheet ID", value=active_config.get("sheet_id"))
+    worksheet_name = st.text_input("Название листа", value=active_config.get("worksheet_name"))
 with col2:
-    url_column = st.number_input("Номер колонки со ссылками на PDF (A=1, B=2...)", min_value=1, value=int(user_config.get("url_column")))
-    out_column = st.number_input("Номер колонки для вывода результата (A=1, B=2...)", min_value=1, value=int(user_config.get("out_column")))
+    url_column = st.number_input("Номер колонки со ссылками на PDF (A=1, B=2...)", min_value=1, value=int(active_config.get("url_column")))
+    out_column = st.number_input("Номер колонки для вывода результата (A=1, B=2...)", min_value=1, value=int(active_config.get("out_column")))
 
 model_options = ["gemini-2.5-flash", "gemini-2.5-pro"]
-saved_model = user_config.get("model_name")
+saved_model = active_config.get("model_name")
 model_index = model_options.index(saved_model) if saved_model in model_options else 0
 model_name = st.selectbox("Версия модели Gemini", model_options, index=model_index)
 
-system_prompt = st.text_area("Системная инструкция (System Instruction)", value=user_config.get("system_prompt"), height=180)
-prompt_text = st.text_area("Основной текст промта (Ожидаемая JSON структура)", value=user_config.get("prompt_text"), height=270)
+# === НОВЫЙ УНИВЕРСАЛЬНЫЙ ШАБЛОН ВЫВОДА ===
+output_template = st.text_input(
+    "Шаблон вывода в ячейку таблицы (Используйте плейсхолдеры в фигурных скобках {})", 
+    value=active_config.get("output_template", "{partner}")
+)
+st.caption(
+    "Пример: `Партнер - {partner}` или `CPU: {cpu}; RAM: {ram}`. "
+    "Названия полей внутри скобок {} должны в точности совпадать с ключами JSON из промта ниже."
+)
 
-if st.button("💾 Сохранить текущие настройки в файл", use_container_width=True):
-    current_settings = {
+system_prompt = st.text_area("Системная инструкция (System Instruction)", value=active_config.get("system_prompt"), height=180)
+prompt_text = st.text_area("Основной текст промта (Ожидаемая JSON структура)", value=active_config.get("prompt_text"), height=270)
+
+# Сохранение настроек в активный профиль
+if st.button("💾 Сохранить изменения в текущий профиль", use_container_width=True):
+    profiles[selected_profile] = {
         "gemini_api_key": gemini_api_key,
         "sheet_id": sheet_id,
         "worksheet_name": worksheet_name,
         "url_column": url_column,
         "out_column": out_column,
         "model_name": model_name,
+        "output_template": output_template,
         "system_prompt": system_prompt,
         "prompt_text": prompt_text
     }
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(current_settings, f, ensure_ascii=False, indent=4)
-    st.success("✅ Настройки успешно сохранены на вашем компьютере!")
+    with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(profiles, f, ensure_ascii=False, indent=4)
+    st.success("✅ Изменения в профиле успешно сохранены!")
     time.sleep(1)
     st.rerun()
 
@@ -160,7 +233,7 @@ st.markdown("---")
 # === УПРАВЛЕНИЕ КНОПКАМИ СТАРТ / СТОП ===
 if not st.session_state["processing"]:
     if st.button("🚀 Запустить потоковую обработку таблицы", type="primary", use_container_width=True):
-        if not gemini_api_key:
+        if not gemini_api_key or gemini_api_key == "Вставьте API токен Gemini":
             st.error("Критическая ошибка: Заполните Gemini API Key!")
         elif not uploaded_creds and not os.path.exists("credentials.json"):
             st.error("Критическая ошибка: Файл credentials.json не найден ни в папке, ни в загрузчике!")
@@ -180,8 +253,8 @@ if st.session_state["processing"]:
         model = genai.GenerativeModel(model_name=model_name, system_instruction=system_prompt)
         
         google_scopes = [
-            sanitize_string("[https://www.googleapis.com/auth/spreadsheets](https://www.googleapis.com/auth/spreadsheets)"),
-            sanitize_string("[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)")
+            sanitize_string("https://www.googleapis.com/auth/spreadsheets"),
+            sanitize_string("https://www.googleapis.com/auth/drive")
         ]
         
         if uploaded_creds:
@@ -225,7 +298,6 @@ if st.session_state["processing"]:
             raw_url_cell = row[url_column - 1] if len(row) >= url_column else ""
             current_result = row[out_column - 1] if len(row) >= out_column else ""
             
-            # --- ИСПРАВЛЕНИЕ: Принудительное приведение к str() для защиты от int ячеек ---
             raw_url_str = str(raw_url_cell).strip()
             current_result_str = str(current_result).strip()
             
@@ -254,21 +326,27 @@ if st.session_state["processing"]:
                                     prompt_text
                                 ], generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
                                 
+                                # Парсим полученный от Gemini JSON
                                 data = json.loads(api_res.text)
                                 
-                                formatted_str = (
-                                    f"Тип: {data.get('type')}; "
-                                    f"CPU: {data.get('cpu')}; "
-                                    f"RAM: {data.get('ram')}; "
-                                    f"SSD/HDD: {data.get('storage')}; "
-                                    f"GPU: {data.get('gpu')}; "
-                                    f"Экран: {data.get('screen')}; "
-                                    f"ОС: {data.get('os')}; "
-                                    f"Периферия: {data.get('peripherals')}"
-                                )
+                                # === УНИВЕРСАЛЬНОЕ ФОРМАТИРОВАНИЕ ВЫВОДА ===
+                                if isinstance(data, dict) and output_template.strip():
+                                    try:
+                                        # Ищем все переменные в фигурных скобках {переменная}
+                                        keys_needed = re.findall(r'\{(.*?)\}', output_template)
+                                        # Создаем словарь для форматирования с защитой от отсутствующих ключей
+                                        format_dict = {k: data.get(k, "—") for k in keys_needed}
+                                        formatted_str = output_template.format(**format_dict)
+                                    except Exception as format_err:
+                                        log(f"Предупреждение: не удалось отформатировать по шаблону ({format_err}). Вывод в сыром виде.")
+                                        formatted_str = str(data)
+                                else:
+                                    # Если шаблона нет, просто склеиваем все ключ-значения
+                                    formatted_str = "; ".join([f"{k}: {v}" for k, v in data.items()]) if isinstance(data, dict) else str(data)
                                 
+                                # Запись в Google Таблицу
                                 sheet.update_cell(row_number, out_column, formatted_str)
-                                log(f"-> Строка {row_number}: Успешно записано CPU: {data.get('cpu')}")
+                                log(f"-> Строка {row_number}: Успешно записано: {formatted_str[:60]}...")
                                 request_count += 1
                                 break
                             except Exception as api_err:
