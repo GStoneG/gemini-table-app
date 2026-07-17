@@ -312,20 +312,53 @@ if st.session_state["processing"]:
                 log(f"[{row_number}/{total_rows}] Скачивание: {download_url[:50]}...")
                 
                 try:
-                    res = requests.get(download_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+                    # ПОТОКОВОЕ СКАЧИВАНИЕ С ОГРАНИЧЕНИЕМ ПО РАЗМЕРУ В 15 МБ
+                    res = requests.get(download_url, headers={'User-Agent': 'Mozilla/5.0'}, stream=True, timeout=20)
+                    
                     if res.status_code == 200:
-                        pdf_bytes = res.content
+                        content_length = res.headers.get('content-length')
+                        # Защита 1: Проверка заголовка размера
+                        if content_length and int(content_length) > 15 * 1024 * 1024:
+                            raise Exception("Файл слишком большой (размер по заголовку > 15MB)")
+                            
+                        pdf_bytes = bytearray()
+                        for chunk in res.iter_content(chunk_size=16384):
+                            if not st.session_state["processing"]:
+                                break
+                            pdf_bytes.extend(chunk)
+                            # Защита 2: Проверка размера "на лету" в процессе скачивания
+                            if len(pdf_bytes) > 15 * 1024 * 1024:
+                                raise Exception("Размер файла превысил предел в 15MB при загрузке")
+                        
+                        # Защита 3: Проверка сигнатуры PDF файла
+                        # Специфические сайты при блокировке возвращают HTML-текст (ошибка Cloudflare/Qrator/Nginx) под видом PDF
+                        if not pdf_bytes.startswith(b'%PDF'):
+                            # Попытка проверить, не HTML ли это
+                            try:
+                                sample_text = pdf_bytes[:500].decode('utf-8', errors='ignore')
+                                if "<html" in sample_text.lower() or "<!doctype" in sample_text.lower():
+                                    raise Exception("Сайт вернул страницу блокировки (HTML) вместо файла PDF")
+                            except:
+                                pass
+                            raise Exception("Загруженный файл не является валидным PDF")
+
+                        log(f"-> Скачано ({len(pdf_bytes) / (1024 * 1024):.2f} МБ). Отправка в Gemini API...")
                         
                         for attempt in range(3):
                             if not st.session_state["processing"]:
                                 break
 
                             try:
+                                # Запрос к Gemini с жестким таймаутом в 120 секунд
                                 api_res = model.generate_content([
-                                    {'mime_type': 'application/pdf', 'data': pdf_bytes}, 
+                                    {'mime_type': 'application/pdf', 'data': bytes(pdf_bytes)}, 
                                     prompt_text
-                                ], generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
+                                ], 
+                                generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
+                                request_options={"timeout": 120}  # Настройка таймаута
+                                )
                                 
+                                log("-> Ответ от Gemini получен. Парсинг...")
                                 # Парсим полученный от Gemini JSON
                                 data = json.loads(api_res.text)
                                 
@@ -345,6 +378,7 @@ if st.session_state["processing"]:
                                     formatted_str = "; ".join([f"{k}: {v}" for k, v in data.items()]) if isinstance(data, dict) else str(data)
                                 
                                 # Запись в Google Таблицу
+                                log("-> Запись результата в Google Таблицу...")
                                 sheet.update_cell(row_number, out_column, formatted_str)
                                 log(f"-> Строка {row_number}: Успешно записано: {formatted_str[:60]}...")
                                 request_count += 1
@@ -352,10 +386,11 @@ if st.session_state["processing"]:
                             except Exception as api_err:
                                 if "429" in str(api_err):
                                     wait_time = (2 ** attempt) * 20
-                                    log(f"Превышен лимит! Ожидание {wait_time} сек...")
+                                    log(f"Превышен лимит (429)! Ожидание {wait_time} сек...")
                                     time.sleep(wait_time)
                                 else:
-                                    log(f"Ошибка парсинга JSON: {api_err}")
+                                    log(f"Ошибка Gemini / JSON: {api_err}")
+                                    sheet.update_cell(row_number, out_column, f"Ошибка API/JSON: {str(api_err)[:100]}")
                                     break
                                     
                         if request_count > 0 and request_count % 10 == 0:
@@ -364,11 +399,19 @@ if st.session_state["processing"]:
                         else:
                             time.sleep(5)
                     else:
-                        sheet.update_cell(row_number, out_column, f"Ошибка загрузки {res.status_code}")
+                        error_msg = f"Ошибка загрузки: код сервера {res.status_code}"
+                        log(f"-> {error_msg}")
+                        sheet.update_cell(row_number, out_column, error_msg)
                         time.sleep(5)
                 except Exception as row_err:
-                    log(f"Ошибка обработки строки {row_number}: {row_err}")
-                    time.sleep(10)
+                    error_msg = f"Ошибка: {row_err}"
+                    log(f"-> {error_msg}")
+                    # Записываем ошибку в ячейку таблицы, чтобы скрипт шел дальше и не зацикливался
+                    try:
+                        sheet.update_cell(row_number, out_column, f"Ошибка обработки: {str(row_err)[:100]}")
+                    except Exception as sheet_err:
+                        log(f"Не удалось записать статус ошибки в таблицу: {sheet_err}")
+                    time.sleep(5)
                     
         if st.session_state["processing"]:
             st.success("🎉 Обработка всей таблицы успешно завершена!")
