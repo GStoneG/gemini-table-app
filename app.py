@@ -9,6 +9,60 @@ import os
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
+# === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С КОЛОНКАМИ И СТРОКАМИ ===
+def col2num(col):
+    """Преобразует букву колонки (A, B, AF...) в число (1, 2, 32...)"""
+    if isinstance(col, int):
+        return col
+    if not col:
+        return 1
+    col_str = str(col).strip().upper()
+    if col_str.isdigit():
+        return int(col_str)
+    num = 0
+    for c in col_str:
+        if 'A' <= c <= 'Z':
+            num = num * 26 + (ord(c) - ord('A') + 1)
+    return num if num > 0 else 1
+
+def num2col(col):
+    """Преобразует число колонки в букву (32 -> AF)"""
+    if isinstance(col, str):
+        col_str = col.strip().upper()
+        if not col_str.isdigit():
+            return col_str if col_str else "A"
+        num = int(col_str)
+    else:
+        num = int(col)
+    
+    res = ""
+    while num > 0:
+        num, remainder = divmod(num - 1, 26)
+        res = chr(65 + remainder) + res
+    return res or "A"
+
+def parse_target_rows(rows_str):
+    """Парсит строку с номерами строк (например: '320, 325, 340' или '320-325') в множество чисел"""
+    if not rows_str or not str(rows_str).strip():
+        return set()
+    rows = set()
+    parts = re.split(r'[,;\s]+', str(rows_str).strip())
+    for part in parts:
+        if not part:
+            continue
+        if '-' in part:
+            try:
+                start, end = part.split('-', 1)
+                rows.update(range(int(start), int(end) + 1))
+            except ValueError:
+                pass
+        else:
+            try:
+                rows.add(int(part))
+            except ValueError:
+                pass
+    return rows
+
 # === БЛОК РАБОТЫ С НАСТРОЙКАМИ И ПРОФИЛЯМИ ===
 CONFIGS_FILE = "app_profiles.json"
 
@@ -18,8 +72,9 @@ DEFAULT_PROFILES = {
         "gemini_api_key": "Вставьте API токен Gemini",
         "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
         "worksheet_name": "Лоты",
-        "url_column": 32,
-        "out_column": 12,
+        "url_column": "AF",
+        "out_column": "L",
+        "target_rows": "",
         "model_name": "gemini-2.5-flash",
         "output_template": "Партнер - {partner}",
         "system_prompt": (
@@ -49,8 +104,9 @@ DEFAULT_PROFILES = {
         "gemini_api_key": "Вставьте API токен Gemini",
         "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
         "worksheet_name": "Лоты",
-        "url_column": 32,
-        "out_column": 12,
+        "url_column": "AF",
+        "out_column": "L",
+        "target_rows": "",
         "model_name": "gemini-2.5-flash",
         "output_template": "Тип: {type}; CPU: {cpu}; RAM: {ram}; SSD/HDD: {storage}; GPU: {gpu}; Экран: {screen}; ОС: {os}; Периферия: {peripherals}",
         "system_prompt": (
@@ -157,7 +213,6 @@ selected_profile = st.sidebar.selectbox("Выберите активный пр�
 new_profile_name = st.sidebar.text_input("➕ Создать новый профиль (введите имя)")
 if st.sidebar.button("Создать профиль", use_container_width=True):
     if new_profile_name.strip() and new_profile_name not in profiles:
-        # Создаем копию текущего выбранного или пустой шаблон
         profiles[new_profile_name] = profiles[selected_profile].copy()
         with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
             json.dump(profiles, f, ensure_ascii=False, indent=4)
@@ -187,9 +242,17 @@ col1, col2 = st.columns(2)
 with col1:
     sheet_id = st.text_input("Google Sheet ID", value=active_config.get("sheet_id"))
     worksheet_name = st.text_input("Название листа", value=active_config.get("worksheet_name"))
+    target_rows_input = st.text_input(
+        "Номера строк для обработки (например: 320, 325, 340 или пусто для всех)", 
+        value=str(active_config.get("target_rows", ""))
+    )
+
 with col2:
-    url_column = st.number_input("Номер колонки со ссылками на PDF (A=1, B=2...)", min_value=1, value=int(active_config.get("url_column")))
-    out_column = st.number_input("Номер колонки для вывода результата (A=1, B=2...)", min_value=1, value=int(active_config.get("out_column")))
+    url_col_input = st.text_input("Буква колонки со ссылками на PDF (A, B, AF...)", value=num2col(active_config.get("url_column", "AF")))
+    out_col_input = st.text_input("Буква колонки для вывода результата (A, B, L...)", value=num2col(active_config.get("out_column", "L")))
+
+url_column = col2num(url_col_input)
+out_column = col2num(out_col_input)
 
 model_options = ["gemini-2.5-flash", "gemini-2.5-pro"]
 saved_model = active_config.get("model_name")
@@ -215,8 +278,9 @@ if st.button("💾 Сохранить изменения в текущий пр�
         "gemini_api_key": gemini_api_key,
         "sheet_id": sheet_id,
         "worksheet_name": worksheet_name,
-        "url_column": url_column,
-        "out_column": out_column,
+        "url_column": num2col(url_col_input),
+        "out_column": num2col(out_col_input),
+        "target_rows": target_rows_input,
         "model_name": model_name,
         "output_template": output_template,
         "system_prompt": system_prompt,
@@ -286,12 +350,23 @@ if st.session_state["processing"]:
         total_rows = len(all_rows)
         request_count = 0
         
+        target_rows = parse_target_rows(target_rows_input)
+        if target_rows:
+            log(f"🎯 Выбраны строки для обработки: {sorted(list(target_rows))}")
+        else:
+            log("ℹ️ Список строк пуст: обработка всех незаполненных ячеек.")
+        
         for index in range(1, total_rows):
             if not st.session_state["processing"]:
                 log("🛑 Обработка была принудительно прервана пользователем.")
                 break
                 
             row_number = index + 1
+            
+            # Пропускаем строки, если зажат фильтр по строкам и текущая строка в него не входит
+            if target_rows and row_number not in target_rows:
+                continue
+
             row = all_rows[index]
             progress_bar.progress(index / (total_rows - 1))
             
@@ -301,7 +376,11 @@ if st.session_state["processing"]:
             raw_url_str = str(raw_url_cell).strip()
             current_result_str = str(current_result).strip()
             
-            if raw_url_cell and not current_result_str:
+            # Если строки были выбраны явно, обрабатываем их при наличии URL.
+            # Если строки не выбраны — обрабатываем только незаполненные.
+            should_process = bool(raw_url_str) if target_rows else bool(raw_url_str and not current_result_str)
+            
+            if should_process:
                 download_url = raw_url_str
                 
                 if download_url.startswith('='):
@@ -317,7 +396,6 @@ if st.session_state["processing"]:
                     
                     if res.status_code == 200:
                         content_length = res.headers.get('content-length')
-                        # Защита 1: Проверка заголовка размера
                         if content_length and int(content_length) > 15 * 1024 * 1024:
                             raise Exception("Файл слишком большой (размер по заголовку > 15MB)")
                             
@@ -326,14 +404,10 @@ if st.session_state["processing"]:
                             if not st.session_state["processing"]:
                                 break
                             pdf_bytes.extend(chunk)
-                            # Защита 2: Проверка размера "на лету" в процессе скачивания
                             if len(pdf_bytes) > 15 * 1024 * 1024:
                                 raise Exception("Размер файла превысил предел в 15MB при загрузке")
                         
-                        # Защита 3: Проверка сигнатуры PDF файла
-                        # Специфические сайты при блокировке возвращают HTML-текст (ошибка Cloudflare/Qrator/Nginx) под видом PDF
                         if not pdf_bytes.startswith(b'%PDF'):
-                            # Попытка проверить, не HTML ли это
                             try:
                                 sample_text = pdf_bytes[:500].decode('utf-8', errors='ignore')
                                 if "<html" in sample_text.lower() or "<!doctype" in sample_text.lower():
@@ -349,32 +423,27 @@ if st.session_state["processing"]:
                                 break
 
                             try:
-                                # Запрос к Gemini с жестким таймаутом в 120 секунд
                                 api_res = model.generate_content([
                                     {'mime_type': 'application/pdf', 'data': bytes(pdf_bytes)}, 
                                     prompt_text
                                 ], 
                                 generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
-                                request_options={"timeout": 120}  # Настройка таймаута
+                                request_options={"timeout": 120}
                                 )
                                 
                                 log("-> Ответ от Gemini получен. Парсинг...")
-                                # Парсим полученный от Gemini JSON
                                 data = json.loads(api_res.text)
                                 
                                 # === УНИВЕРСАЛЬНОЕ ФОРМАТИРОВАНИЕ ВЫВОДА ===
                                 if isinstance(data, dict) and output_template.strip():
                                     try:
-                                        # Ищем все переменные в фигурных скобках {переменная}
                                         keys_needed = re.findall(r'\{(.*?)\}', output_template)
-                                        # Создаем словарь для форматирования с защитой от отсутствующих ключей
                                         format_dict = {k: data.get(k, "—") for k in keys_needed}
                                         formatted_str = output_template.format(**format_dict)
                                     except Exception as format_err:
                                         log(f"Предупреждение: не удалось отформатировать по шаблону ({format_err}). Вывод в сыром виде.")
                                         formatted_str = str(data)
                                 else:
-                                    # Если шаблона нет, просто склеиваем все ключ-значения
                                     formatted_str = "; ".join([f"{k}: {v}" for k, v in data.items()]) if isinstance(data, dict) else str(data)
                                 
                                 # Запись в Google Таблицу
@@ -406,7 +475,6 @@ if st.session_state["processing"]:
                 except Exception as row_err:
                     error_msg = f"Ошибка: {row_err}"
                     log(f"-> {error_msg}")
-                    # Записываем ошибку в ячейку таблицы, чтобы скрипт шел дальше и не зацикливался
                     try:
                         sheet.update_cell(row_number, out_column, f"Ошибка обработки: {str(row_err)[:100]}")
                     except Exception as sheet_err:
@@ -414,7 +482,7 @@ if st.session_state["processing"]:
                     time.sleep(5)
                     
         if st.session_state["processing"]:
-            st.success("🎉 Обработка всей таблицы успешно завершена!")
+            st.success("🎉 Обработка выбранных строк/таблицы успешно завершена!")
             st.session_state["processing"] = False
             st.rerun()
             
