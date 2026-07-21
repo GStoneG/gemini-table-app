@@ -1,35 +1,31 @@
 import streamlit as st
-# CSS-стили для полного скрытия кнопки Fork, GitHub и верхнего меню
-hide_streamlit_style = """
+hide_github_and_fork = """
     <style>
-    /* Полностью скрывает шапку приложения (включая кнопку Fork и иконку GitHub) */
+    /* Оставляем шапку видимой для кнопки авторизации */
     header[data-testid="stHeader"] {
+        display: flex !important;
+        background: transparent !important;
+    }
+
+    /* Скрываем только ссылку/иконку GitHub в шапке */
+    header[data-testid="stHeader"] a[href*="github.com"] {
         display: none !important;
     }
-    
-    /* Скрывает тулбар и элементы управления Streamlit Cloud */
-    [data-testid="stToolbar"] {
+
+    /* Скрываем кнопку Fork в Streamlit Cloud */
+    header[data-testid="stHeader"] button[title*="Fork"],
+    header[data-testid="stHeader"] button[aria-label*="Fork"],
+    header[data-testid="stHeader"] [data-testid="stActionButton"] {
         display: none !important;
     }
-    
-    /* Скрывает цветную полосу в самом верху (декорацию) */
-    [data-testid="stDecoration"] {
-        display: none !important;
-    }
-    
-    /* Скрывает гамбургер-меню */
-    #MainMenu {
-        display: none !important;
-    }
-    
-    /* Скрывает футер "Made with Streamlit" */
-    footer {
-        display: none !important;
-    }
+
+    /* Скрываем главное меню (гамбургер) и футер, если они не нужны */
+    #MainMenu { display: none !important; }
+    footer { display: none !important; }
     </style>
 """
 
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+st.markdown(hide_github_and_fork, unsafe_allow_html=True)
 
 import time
 import re
