@@ -207,15 +207,27 @@ if st.session_state["username"]:
 # === УПРАВЛЕНИЕ ПРОФИЛЯМИ В СИДБАРЕ ===
 st.sidebar.header("📂 Профили настроек")
 profile_names = list(profiles.keys())
-selected_profile = st.sidebar.selectbox("Выберите активный профиль", profile_names)
+
+# Гарантируем корректный выбор профиля в session_state
+if "selected_profile" not in st.session_state or st.session_state["selected_profile"] not in profile_names:
+    st.session_state["selected_profile"] = profile_names[0]
+
+selected_profile = st.sidebar.selectbox(
+    "Выберите активный профиль", 
+    profile_names, 
+    index=profile_names.index(st.session_state["selected_profile"])
+)
+st.session_state["selected_profile"] = selected_profile
 
 # Возможность создать новый профиль
-new_profile_name = st.sidebar.text_input("➕ Создать новый профиль (введите имя)")
+new_profile_name = st.sidebar.text_input("➕ Создать новый профиль (введите имя)", key="new_profile_input")
 if st.sidebar.button("Создать профиль", use_container_width=True):
     if new_profile_name.strip() and new_profile_name not in profiles:
+        # Копируем настройки текущего профиля в новый
         profiles[new_profile_name] = profiles[selected_profile].copy()
         with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
             json.dump(profiles, f, ensure_ascii=False, indent=4)
+        st.session_state["selected_profile"] = new_profile_name
         st.success(f"Профиль '{new_profile_name}' успешно создан!")
         st.rerun()
     elif new_profile_name in profiles:
@@ -227,6 +239,7 @@ if len(profiles) > 1:
         del profiles[selected_profile]
         with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
             json.dump(profiles, f, ensure_ascii=False, indent=4)
+        st.session_state["selected_profile"] = list(profiles.keys())[0]
         st.success("Профиль успешно удален!")
         st.rerun()
 
@@ -234,22 +247,48 @@ if len(profiles) > 1:
 active_config = profiles[selected_profile]
 
 st.sidebar.header("🔑 Настройки доступа")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", value=active_config.get("gemini_api_key"), type="password")
-uploaded_creds = st.sidebar.file_uploader("Загрузите credentials.json (необязательно, если файл лежит в папке скрипта)", type=["json"])
+gemini_api_key = st.sidebar.text_input(
+    "Gemini API Key", 
+    value=active_config.get("gemini_api_key", ""), 
+    type="password",
+    key=f"gemini_api_key_{selected_profile}"
+)
+uploaded_creds = st.sidebar.file_uploader(
+    "Загрузите credentials.json (необязательно, если файл лежит в папке скрипта)", 
+    type=["json"],
+    key=f"uploaded_creds_{selected_profile}"
+)
 
 st.header(f"⚙️ Конфигурация: {selected_profile}")
 col1, col2 = st.columns(2)
 with col1:
-    sheet_id = st.text_input("Google Sheet ID", value=active_config.get("sheet_id"))
-    worksheet_name = st.text_input("Название листа", value=active_config.get("worksheet_name"))
+    sheet_id = st.text_input(
+        "Google Sheet ID", 
+        value=active_config.get("sheet_id", ""),
+        key=f"sheet_id_{selected_profile}"
+    )
+    worksheet_name = st.text_input(
+        "Название листа", 
+        value=active_config.get("worksheet_name", ""),
+        key=f"worksheet_name_{selected_profile}"
+    )
     target_rows_input = st.text_input(
         "Номера строк для обработки (например: 320, 325, 340 или пусто для всех)", 
-        value=str(active_config.get("target_rows", ""))
+        value=str(active_config.get("target_rows", "")),
+        key=f"target_rows_{selected_profile}"
     )
 
 with col2:
-    url_col_input = st.text_input("Буква колонки со ссылками на PDF (A, B, AF...)", value=num2col(active_config.get("url_column", "AF")))
-    out_col_input = st.text_input("Буква колонки для вывода результата (A, B, L...)", value=num2col(active_config.get("out_column", "L")))
+    url_col_input = st.text_input(
+        "Буква колонки со ссылками на PDF (A, B, AF...)", 
+        value=num2col(active_config.get("url_column", "AF")),
+        key=f"url_col_{selected_profile}"
+    )
+    out_col_input = st.text_input(
+        "Буква колонки для вывода результата (A, B, L...)", 
+        value=num2col(active_config.get("out_column", "L")),
+        key=f"out_col_{selected_profile}"
+    )
 
 url_column = col2num(url_col_input)
 out_column = col2num(out_col_input)
@@ -257,20 +296,31 @@ out_column = col2num(out_col_input)
 model_options = ["gemini-2.5-flash", "gemini-2.5-pro"]
 saved_model = active_config.get("model_name")
 model_index = model_options.index(saved_model) if saved_model in model_options else 0
-model_name = st.selectbox("Версия модели Gemini", model_options, index=model_index)
+model_name = st.selectbox("Версия модели Gemini", model_options, index=model_index, key=f"model_name_{selected_profile}")
 
-# === НОВЫЙ УНИВЕРСАЛЬНЫЙ ШАБЛОН ВЫВОДА ===
+# === УНИВЕРСАЛЬНЫЙ ШАБЛОН ВЫВОДА ===
 output_template = st.text_input(
     "Шаблон вывода в ячейку таблицы (Используйте плейсхолдеры в фигурных скобках {})", 
-    value=active_config.get("output_template", "{partner}")
+    value=active_config.get("output_template", "{partner}"),
+    key=f"output_template_{selected_profile}"
 )
 st.caption(
     "Пример: `Партнер - {partner}` или `CPU: {cpu}; RAM: {ram}`. "
     "Названия полей внутри скобок {} должны в точности совпадать с ключами JSON из промта ниже."
 )
 
-system_prompt = st.text_area("Системная инструкция (System Instruction)", value=active_config.get("system_prompt"), height=180)
-prompt_text = st.text_area("Основной текст промта (Ожидаемая JSON структура)", value=active_config.get("prompt_text"), height=270)
+system_prompt = st.text_area(
+    "Системная инструкция (System Instruction)", 
+    value=active_config.get("system_prompt", ""), 
+    height=180,
+    key=f"system_prompt_{selected_profile}"
+)
+prompt_text = st.text_area(
+    "Основной текст промта (Ожидаемая JSON структура)", 
+    value=active_config.get("prompt_text", ""), 
+    height=270,
+    key=f"prompt_text_{selected_profile}"
+)
 
 # Сохранение настроек в активный профиль
 if st.button("💾 Сохранить изменения в текущий профиль", use_container_width=True):
