@@ -1,27 +1,46 @@
 import streamlit as st
+# Расширенный CSS для точечного скрытия GitHub и Fork
 hide_github_and_fork = """
     <style>
-    /* Оставляем шапку видимой для кнопки авторизации */
-    header[data-testid="stHeader"] {
+    /* 1. Скрываем иконки и ссылки GitHub */
+    #GithubIcon,
+    a[href*="github.com"],
+    a[aria-label*="GitHub"],
+    a[title*="GitHub"] {
+        display: none !important;
+    }
+
+    /* 2. Скрываем кнопку Fork и экшены шапки */
+    button[title*="Fork"],
+    button[aria-label*="Fork"],
+    [data-testid="stAppHeaderAction"],
+    [data-testid="stHeaderAction"] {
+        display: none !important;
+    }
+
+    /* 3. Скрываем правый тулбар разработки (кнопки GitHub/Fork/Deploy) */
+    [data-testid="stToolbar"] {
+        display: none !important;
+    }
+
+    /* 4. Скрываем плашку "Made with Streamlit" / Viewer Badge */
+    .viewerBadge_container__1QSob,
+    [class*="viewerBadge_container"] {
+        display: none !important;
+    }
+
+    /* 5. ВАЖНО: Сохраняем видимость шапки и формы авторизации */
+    header[data-testid="stHeader"],
+    [data-testid="stAppHeader"] {
         display: flex !important;
         background: transparent !important;
     }
 
-    /* Скрываем только ссылку/иконку GitHub в шапке */
-    header[data-testid="stHeader"] a[href*="github.com"] {
-        display: none !important;
+    /* Гарантируем, что поля ввода логина/пароля в основном окне или сайдбаре видимы */
+    [data-testid="stSidebar"],
+    [data-testid="stMain"] {
+        display: block !important;
     }
-
-    /* Скрываем кнопку Fork в Streamlit Cloud */
-    header[data-testid="stHeader"] button[title*="Fork"],
-    header[data-testid="stHeader"] button[aria-label*="Fork"],
-    header[data-testid="stHeader"] [data-testid="stActionButton"] {
-        display: none !important;
-    }
-
-    /* Скрываем главное меню (гамбургер) и футер, если они не нужны */
-    #MainMenu { display: none !important; }
-    footer { display: none !important; }
     </style>
 """
 
