@@ -1,4 +1,36 @@
 import streamlit as st
+# CSS-стили для полного скрытия кнопки Fork, GitHub и верхнего меню
+hide_streamlit_style = """
+    <style>
+    /* Полностью скрывает шапку приложения (включая кнопку Fork и иконку GitHub) */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    
+    /* Скрывает тулбар и элементы управления Streamlit Cloud */
+    [data-testid="stToolbar"] {
+        display: none !important;
+    }
+    
+    /* Скрывает цветную полосу в самом верху (декорацию) */
+    [data-testid="stDecoration"] {
+        display: none !important;
+    }
+    
+    /* Скрывает гамбургер-меню */
+    #MainMenu {
+        display: none !important;
+    }
+    
+    /* Скрывает футер "Made with Streamlit" */
+    footer {
+        display: none !important;
+    }
+    </style>
+"""
+
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 import time
 import re
 import requests
