@@ -115,12 +115,12 @@ CONFIGS_FILE = "app_profiles.json"
 
 # Дефолтные профили под разные задачи
 DEFAULT_PROFILES = {
-    "Определение Партнеров (Новый)": {
+    "Определение Партнеров": {
         "gemini_api_key": "Вставьте API токен Gemini",
-        "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
+        "sheet_id": "ID таблицы",
         "worksheet_name": "Лоты",
-        "url_column": "AF",
-        "out_column": "L",
+        "url_column": "AU",
+        "out_column": "S",
         "target_rows": "",
         "model_name": "gemini-2.5-flash",
         "output_template": "Партнер - {partner}",
@@ -147,7 +147,7 @@ DEFAULT_PROFILES = {
             "}"
         )
     },
-    "Анализ Процессоров (Старый)": {
+    "Анализ компьютерной техники": {
         "gemini_api_key": "Вставьте API токен Gemini",
         "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
         "worksheet_name": "Лоты",
@@ -155,7 +155,7 @@ DEFAULT_PROFILES = {
         "out_column": "L",
         "target_rows": "",
         "model_name": "gemini-2.5-flash",
-        "output_template": "Тип: {type}; CPU: {cpu}; RAM: {ram}; SSD/HDD: {storage}; GPU: {gpu}; Экран: {screen}; ОС: {os}; Периферия: {peripherals}",
+        "output_template": "Тип: {type}; CPU: {cpu}; RAM: {ram}; SSD/HDD: {storage}; GPU: {gpu}; Экран: {screen}; ОС: {os}; Дополнительные программы: {po}; Периферия: {peripherals}",
         "system_prompt": (
             "Ты — первоклассный эксперт по компьютерному аппаратному обеспечению и архитектуре процессоров. "
             "Твоя главная задача — проанализировать числовые параметры процессора из текста госзакупок "
@@ -176,6 +176,7 @@ DEFAULT_PROFILES = {
             "  \"gpu\": \"Видеокарта\",\n"
             "  \"screen\": \"Экран (Диагональ, разрешение, тип матрицы)\",\n"
             "  \"os\": \"Операционная система\",\n"
+            "  \"po\": \"Дополнительные программы (Например: Microsoft Office Home and Business 2024, Антивирус\",\n"
             "  \"peripherals\": \"Периферия и доп. устройства (Клавиатура, мышь, наушники, веб-камера, коврик, если есть в тексте)\"\n"
             "}"
         )
