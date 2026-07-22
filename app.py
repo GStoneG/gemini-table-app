@@ -126,6 +126,23 @@ def sanitize_string(text):
             return url_match.group(1).strip()
     return text
 
+def clean_json_text(text):
+    """Очищает ответ Gemini от блоков разметки Markdown ```json ... ``` для корректного парсинга"""
+    if not text:
+        return ""
+    cleaned = re.sub(r'```(?:json)?\s*', '', text, flags=re.IGNORECASE)
+    cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+def clear_profile_widget_keys():
+    """Сбрасывает сохраненные значения полей в session_state для корректного обновления UI"""
+    keys_to_clear = [k for k in st.session_state.keys() if any(k.startswith(prefix) for prefix in [
+        "gemini_api_key_", "sheet_id_", "worksheet_name_", "url_col_", "out_col_",
+        "target_rows_", "model_name_", "output_template_", "system_prompt_", "prompt_text_"
+    ])]
+    for k in keys_to_clear:
+        del st.session_state[k]
+
 # === БЛОК РАБОТЫ С НАСТРОЙКАМИ И ПРОФИЛЯМИ ===
 CONFIGS_FILE = "app_profiles.json"
 
@@ -338,9 +355,9 @@ st.session_state["selected_profile"] = selected_profile
 new_profile_name = st.sidebar.text_input("➕ Создать новый профиль (введите имя)", key="new_profile_input")
 if st.sidebar.button("Создать профиль", use_container_width=True):
     if new_profile_name.strip() and new_profile_name not in profiles:
-        # Копируем настройки текущего профиля в новый
         profiles[new_profile_name] = profiles[selected_profile].copy()
         save_profiles_cloud_and_local(profiles)
+        clear_profile_widget_keys()
         st.session_state["selected_profile"] = new_profile_name
         st.success(f"Профиль '{new_profile_name}' успешно создан!")
         st.rerun()
@@ -352,6 +369,7 @@ if len(profiles) > 1:
     if st.sidebar.button("🗑️ Удалить текущий профиль", type="secondary", use_container_width=True):
         del profiles[selected_profile]
         save_profiles_cloud_and_local(profiles)
+        clear_profile_widget_keys()
         st.session_state["selected_profile"] = list(profiles.keys())[0]
         st.success("Профиль успешно удален!")
         st.rerun()
@@ -360,7 +378,6 @@ if len(profiles) > 1:
 st.sidebar.markdown("---")
 st.sidebar.subheader("💾 Бэкап и Восстановление профилей")
 
-# Кнопка скачивания всех профилей в JSON
 st.sidebar.download_button(
     label="📥 Скачать бэкап профилей (JSON)",
     data=json.dumps(profiles, ensure_ascii=False, indent=4),
@@ -369,7 +386,6 @@ st.sidebar.download_button(
     use_container_width=True
 )
 
-# Загрузка бэкапа профилей с компьютера
 uploaded_profiles_backup = st.sidebar.file_uploader(
     "Загрузить бэкап профилей (.json)", 
     type=["json"],
@@ -380,6 +396,8 @@ if uploaded_profiles_backup is not None:
         imported_data = json.load(uploaded_profiles_backup)
         if isinstance(imported_data, dict) and len(imported_data) > 0:
             save_profiles_cloud_and_local(imported_data)
+            clear_profile_widget_keys()
+            st.session_state["selected_profile"] = list(imported_data.keys())[0]
             st.sidebar.success("Профили успешно загружены!")
             time.sleep(1)
             st.rerun()
@@ -445,7 +463,7 @@ with col2:
 url_column = col2num(url_col_input)
 out_column = col2num(out_col_input)
 
-model_options = ["gemini-2.5-flash", "gemini-2.5-pro"]
+model_options = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
 saved_model = active_config.get("model_name")
 model_index = model_options.index(saved_model) if saved_model in model_options else 0
 model_name = st.selectbox("Версия модели Gemini", model_options, index=model_index, key=f"model_name_{selected_profile}")
@@ -558,7 +576,7 @@ if st.session_state["processing"]:
                 
             row_number = index + 1
             
-            # Пропускаем строки, если зажат фильтр по строкам и текущая строка в него не входит
+            # Пропускаем строки, если задан фильтр и текущая строка в него не входит
             if target_rows and row_number not in target_rows:
                 continue
 
@@ -571,8 +589,7 @@ if st.session_state["processing"]:
             raw_url_str = str(raw_url_cell).strip()
             current_result_str = str(current_result).strip()
             
-            # Если строки были выбраны явно, обрабатываем их при наличии URL.
-            # Если строки не выбраны — обрабатываем только незаполненные.
+            # Определяем целевые строки
             should_process = bool(raw_url_str) if target_rows else bool(raw_url_str and not current_result_str)
             
             if should_process:
@@ -607,7 +624,7 @@ if st.session_state["processing"]:
                                 sample_text = pdf_bytes[:500].decode('utf-8', errors='ignore')
                                 if "<html" in sample_text.lower() or "<!doctype" in sample_text.lower():
                                     raise Exception("Сайт вернул страницу блокировки (HTML) вместо файла PDF")
-                            except:
+                            except Exception:
                                 pass
                             raise Exception("Загруженный файл не является валидным PDF")
 
@@ -627,7 +644,10 @@ if st.session_state["processing"]:
                                 )
                                 
                                 log("-> Ответ от Gemini получен. Парсинг...")
-                                data = json.loads(api_res.text)
+                                
+                                # === ИСПРАВЛЕНИЕ ПЕРВОПРИЧИНЫ: Очистка текста от Markdown перед парсингом ===
+                                cleaned_raw_json = clean_json_text(api_res.text)
+                                data = json.loads(cleaned_raw_json)
                                 
                                 # === УНИВЕРСАЛЬНОЕ ФОРМАТИРОВАНИЕ ВЫВОДА ===
                                 if isinstance(data, dict) and output_template.strip():
