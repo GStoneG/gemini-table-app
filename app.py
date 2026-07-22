@@ -164,10 +164,10 @@ DEFAULT_PROFILES = {
     },
     "Анализ компьютерной техники": {
         "gemini_api_key": "Вставьте API токен Gemini",
-        "sheet_id": "13dHYPv7RkIwrqLpiVuegNkL7ZD9eipfJrYbocIP8_OY",
+        "sheet_id": "ID таблицы",
         "worksheet_name": "Лоты",
-        "url_column": "AF",
-        "out_column": "L",
+        "url_column": "AU",
+        "out_column": "S",
         "target_rows": "",
         "model_name": "gemini-2.5-flash",
         "output_template": "Тип: {type}; CPU: {cpu}; RAM: {ram}; SSD/HDD: {storage}; GPU: {gpu}; Экран: {screen}; ОС: {os}; Дополнительные программы: {po}; Периферия: {peripherals}",
