@@ -1,4 +1,14 @@
 import streamlit as st
+import time
+import re
+import requests
+import gspread
+import json
+import hashlib
+import os
+from google.oauth2.service_account import Credentials
+import google.generativeai as genai
+
 # Расширенный CSS для точечного скрытия GitHub и Fork
 hide_github_and_fork = """
     <style>
@@ -45,16 +55,6 @@ hide_github_and_fork = """
 """
 
 st.markdown(hide_github_and_fork, unsafe_allow_html=True)
-
-import time
-import re
-import requests
-import gspread
-import json
-import hashlib
-import os
-from google.oauth2.service_account import Credentials
-import google.generativeai as genai
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С КОЛОНКАМИ И СТРОКАМИ ===
 def col2num(col):
@@ -110,10 +110,25 @@ def parse_target_rows(rows_str):
                 pass
     return rows
 
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def sanitize_string(text):
+    if not isinstance(text, str):
+        return text
+    text = text.strip()
+    markdown_match = re.search(r'\[.*?\]\((.*?)\)', text)
+    if markdown_match:
+        return markdown_match.group(1).strip()
+    if text.startswith("https://"):
+        url_match = re.search(r'(https://[^\s\'\"\]\)]+)', text)
+        if url_match:
+            return url_match.group(1).strip()
+    return text
+
 # === БЛОК РАБОТЫ С НАСТРОЙКАМИ И ПРОФИЛЯМИ ===
 CONFIGS_FILE = "app_profiles.json"
 
-# Дефолтные профили под разные задачи
 DEFAULT_PROFILES = {
     "Определение Партнеров": {
         "gemini_api_key": "Вставьте API токен Gemini",
@@ -183,33 +198,85 @@ DEFAULT_PROFILES = {
     }
 }
 
-# Проверка наличия файла профилей. Если нет — создаем с дефолтными профилями
-if not os.path.exists(CONFIGS_FILE):
-    with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(DEFAULT_PROFILES, f, ensure_ascii=False, indent=4)
+# === ФУНКЦИИ АВТОМАТИЧЕСКОГО СОХРАНЕНИЯ / ЗАГРУЗКИ ПРОФИЛЕЙ ===
+def get_google_creds():
+    """Получает Google Credentials из st.secrets, файла или из загруженного файла."""
+    google_scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    if "gcp_service_account" in st.secrets:
+        try:
+            return Credentials.from_service_account_info(dict(st.secrets["gcp_service_account"]), scopes=google_scopes)
+        except Exception:
+            pass
+    if os.path.exists("credentials.json"):
+        try:
+            return Credentials.from_service_account_file("credentials.json", scopes=google_scopes)
+        except Exception:
+            pass
+    if "uploaded_creds_dict" in st.session_state and st.session_state["uploaded_creds_dict"]:
+        try:
+            return Credentials.from_service_account_info(st.session_state["uploaded_creds_dict"], scopes=google_scopes)
+        except Exception:
+            pass
+    return None
 
-# Загрузка профилей из файла
-with open(CONFIGS_FILE, "r", encoding="utf-8") as f:
-    profiles = json.load(f)
+def load_profiles_cloud_or_local():
+    """Загрузка профилей: сначала из Google Диска, затем из файла, затем дефолтные."""
+    creds = get_google_creds()
+    if creds:
+        try:
+            client = gspread.authorize(creds)
+            sh = client.open("AI_Parser_Profiles_Backup")
+            ws = sh.sheet1
+            val = ws.cell(1, 1).value
+            if val:
+                data = json.loads(val)
+                if isinstance(data, dict) and len(data) > 0:
+                    return data
+        except Exception:
+            pass
+            
+    if os.path.exists(CONFIGS_FILE):
+        try:
+            with open(CONFIGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    return DEFAULT_PROFILES.copy()
+
+def save_profiles_cloud_and_local(profiles_data):
+    """Сохранение профилей локально + дублирование на Google Диск."""
+    st.session_state["profiles"] = profiles_data
+    try:
+        with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(profiles_data, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
+    creds = get_google_creds()
+    if creds:
+        try:
+            client = gspread.authorize(creds)
+            try:
+                sh = client.open("AI_Parser_Profiles_Backup")
+            except Exception:
+                sh = client.create("AI_Parser_Profiles_Backup")
+            ws = sh.sheet1
+            ws.update_cell(1, 1, json.dumps(profiles_data, ensure_ascii=False, indent=2))
+        except Exception:
+            pass
+
+# Инициализация профилей в session_state
+if "profiles" not in st.session_state:
+    st.session_state["profiles"] = load_profiles_cloud_or_local()
+
+profiles = st.session_state["profiles"]
 
 # Инициализация конфигурации страницы
 st.set_page_config(page_title="Универсальный AI Табличный Парсер", layout="wide", page_icon="📊")
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def sanitize_string(text):
-    if not isinstance(text, str):
-        return text
-    text = text.strip()
-    markdown_match = re.search(r'\[.*?\]\((.*?)\)', text)
-    if markdown_match:
-        return markdown_match.group(1).strip()
-    if text.startswith("https://"):
-        url_match = re.search(r'(https://[^\s\'\"\]\)]+)', text)
-        if url_match:
-            return url_match.group(1).strip()
-    return text
 
 # Инициализация состояний сессии
 if "authenticated" not in st.session_state:
@@ -273,8 +340,7 @@ if st.sidebar.button("Создать профиль", use_container_width=True):
     if new_profile_name.strip() and new_profile_name not in profiles:
         # Копируем настройки текущего профиля в новый
         profiles[new_profile_name] = profiles[selected_profile].copy()
-        with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(profiles, f, ensure_ascii=False, indent=4)
+        save_profiles_cloud_and_local(profiles)
         st.session_state["selected_profile"] = new_profile_name
         st.success(f"Профиль '{new_profile_name}' успешно создан!")
         st.rerun()
@@ -285,11 +351,42 @@ if st.sidebar.button("Создать профиль", use_container_width=True):
 if len(profiles) > 1:
     if st.sidebar.button("🗑️ Удалить текущий профиль", type="secondary", use_container_width=True):
         del profiles[selected_profile]
-        with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(profiles, f, ensure_ascii=False, indent=4)
+        save_profiles_cloud_and_local(profiles)
         st.session_state["selected_profile"] = list(profiles.keys())[0]
         st.success("Профиль успешно удален!")
         st.rerun()
+
+# === БЛОК ИМПОРТА И ЭКСПОРТА БЭКАПА ПРОФИЛЕЙ ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("💾 Бэкап и Восстановление профилей")
+
+# Кнопка скачивания всех профилей в JSON
+st.sidebar.download_button(
+    label="📥 Скачать бэкап профилей (JSON)",
+    data=json.dumps(profiles, ensure_ascii=False, indent=4),
+    file_name="app_profiles.json",
+    mime="application/json",
+    use_container_width=True
+)
+
+# Загрузка бэкапа профилей с компьютера
+uploaded_profiles_backup = st.sidebar.file_uploader(
+    "Загрузить бэкап профилей (.json)", 
+    type=["json"],
+    key="backup_uploader"
+)
+if uploaded_profiles_backup is not None:
+    try:
+        imported_data = json.load(uploaded_profiles_backup)
+        if isinstance(imported_data, dict) and len(imported_data) > 0:
+            save_profiles_cloud_and_local(imported_data)
+            st.sidebar.success("Профили успешно загружены!")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.sidebar.error("Файл содержит неверную структуру JSON!")
+    except Exception as err:
+        st.sidebar.error(f"Ошибка при чтении JSON: {err}")
 
 # Загружаем настройки активного профиля
 active_config = profiles[selected_profile]
@@ -302,10 +399,17 @@ gemini_api_key = st.sidebar.text_input(
     key=f"gemini_api_key_{selected_profile}"
 )
 uploaded_creds = st.sidebar.file_uploader(
-    "Загрузите credentials.json (необязательно, если файл лежит в папке скрипта)", 
+    "Загрузите credentials.json (необязательно, если настроен st.secrets)", 
     type=["json"],
     key=f"uploaded_creds_{selected_profile}"
 )
+
+if uploaded_creds:
+    try:
+        uploaded_creds.seek(0)
+        st.session_state["uploaded_creds_dict"] = json.load(uploaded_creds)
+    except Exception:
+        pass
 
 st.header(f"⚙️ Конфигурация: {selected_profile}")
 col1, col2 = st.columns(2)
@@ -384,8 +488,7 @@ if st.button("💾 Сохранить изменения в текущий пр�
         "system_prompt": system_prompt,
         "prompt_text": prompt_text
     }
-    with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(profiles, f, ensure_ascii=False, indent=4)
+    save_profiles_cloud_and_local(profiles)
     st.success("✅ Изменения в профиле успешно сохранены!")
     time.sleep(1)
     st.rerun()
@@ -397,8 +500,8 @@ if not st.session_state["processing"]:
     if st.button("🚀 Запустить потоковую обработку таблицы", type="primary", use_container_width=True):
         if not gemini_api_key or gemini_api_key == "Вставьте API токен Gemini":
             st.error("Критическая ошибка: Заполните Gemini API Key!")
-        elif not uploaded_creds and not os.path.exists("credentials.json"):
-            st.error("Критическая ошибка: Файл credentials.json не найден ни в папке, ни в загрузчике!")
+        elif not get_google_creds():
+            st.error("Критическая ошибка: Файл credentials.json не найден ни в st.secrets, ни в папке, ни в загрузчике!")
         else:
             st.session_state["processing"] = True
             st.rerun()
@@ -414,17 +517,11 @@ if st.session_state["processing"]:
         genai.configure(api_key=sanitize_string(gemini_api_key))
         model = genai.GenerativeModel(model_name=model_name, system_instruction=system_prompt)
         
-        google_scopes = [
-            sanitize_string("https://www.googleapis.com/auth/spreadsheets"),
-            sanitize_string("https://www.googleapis.com/auth/drive")
-        ]
-        
-        if uploaded_creds:
-            uploaded_creds.seek(0)
-            creds_dict = json.load(uploaded_creds)
-            creds = Credentials.from_service_account_info(creds_dict, scopes=google_scopes)
-        else:
-            creds = Credentials.from_service_account_file("credentials.json", scopes=google_scopes)
+        creds = get_google_creds()
+        if not creds:
+            st.error("Ошибка аутентификации Google API. Загрузите credentials.json.")
+            st.session_state["processing"] = False
+            st.stop()
             
         client = gspread.authorize(creds)
         sheet = client.open_by_key(sanitize_string(sheet_id)).worksheet(worksheet_name)
