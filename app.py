@@ -314,6 +314,12 @@ if "profiles" not in st.session_state:
 
 profiles = st.session_state["profiles"]
 
+# Инициализация динамических ключей для сброса виджетов (защита от бесконечного цикла)
+if "uploader_key" not in st.session_state:
+    st.session_state["uploader_key"] = 0
+if "profile_creator_key" not in st.session_state:
+    st.session_state["profile_creator_key"] = 0
+
 # Инициализация конфигурации страницы
 st.set_page_config(page_title="Универсальный AI Табличный Парсер", layout="wide", page_icon="📊")
 
@@ -373,15 +379,20 @@ selected_profile = st.sidebar.selectbox(
 )
 st.session_state["selected_profile"] = selected_profile
 
-# Возможность создать новый профиль
-new_profile_name = st.sidebar.text_input("➕ Создать новый профиль (введите имя)", key="new_profile_input")
+# Возможность создать новый профиль (с динамеческим ключом от зацикливания)
+new_profile_name = st.sidebar.text_input(
+    "➕ Создать новый профиль (введите имя)", 
+    key=f"new_profile_input_{st.session_state['profile_creator_key']}"
+)
 if st.sidebar.button("Создать профиль", use_container_width=True):
     if new_profile_name.strip() and new_profile_name not in profiles:
         profiles[new_profile_name] = profiles[selected_profile].copy()
         save_profiles_cloud_and_local(profiles)
         clear_profile_widget_keys()
         st.session_state["selected_profile"] = new_profile_name
+        st.session_state["profile_creator_key"] += 1  # Сбрасываем поле ввода
         st.success(f"Профиль '{new_profile_name}' успешно создан!")
+        time.sleep(0.5)
         st.rerun()
     elif new_profile_name in profiles:
         st.warning("Профиль с таким именем уже существует!")
@@ -394,6 +405,7 @@ if len(profiles) > 1:
         clear_profile_widget_keys()
         st.session_state["selected_profile"] = list(profiles.keys())[0]
         st.success("Профиль успешно удален!")
+        time.sleep(0.5)
         st.rerun()
 
 # === БЛОК ИМПОРТА И ЭКСПОРТА БЭКАПА ПРОФИЛЕЙ ===
@@ -408,11 +420,13 @@ st.sidebar.download_button(
     use_container_width=True
 )
 
+# Загрузчик с уникальным ключом для сброса состояния
 uploaded_profiles_backup = st.sidebar.file_uploader(
     "Загрузить бэкап профилей (.json)", 
     type=["json"],
-    key="backup_uploader"
+    key=f"backup_uploader_{st.session_state['uploader_key']}"
 )
+
 if uploaded_profiles_backup is not None:
     try:
         imported_data = json.load(uploaded_profiles_backup)
@@ -420,8 +434,10 @@ if uploaded_profiles_backup is not None:
             save_profiles_cloud_and_local(imported_data)
             clear_profile_widget_keys()
             st.session_state["selected_profile"] = list(imported_data.keys())[0]
+            # Увеличиваем счетчик ключа, чтобы очстить file_uploader и не допустить бесконечного цикла
+            st.session_state["uploader_key"] += 1
             st.sidebar.success("Профили успешно загружены!")
-            time.sleep(1)
+            time.sleep(0.5)
             st.rerun()
         else:
             st.sidebar.error("Ошибка: загруженный файл не является файлом профилей! (Возможно, выбран credentials.json)")
@@ -530,7 +546,7 @@ if st.button("💾 Сохранить изменения в текущий пр�
     }
     save_profiles_cloud_and_local(profiles)
     st.success("✅ Изменения в профиле успешно сохранены!")
-    time.sleep(1)
+    time.sleep(0.5)
     st.rerun()
 
 st.markdown("---")
@@ -667,7 +683,6 @@ if st.session_state["processing"]:
                                 
                                 log("-> Ответ от Gemini получен. Парсинг...")
                                 
-                                # === ИСПРАВЛЕНИЕ ПЕРВОПРИЧИНЫ: Очистка текста от Markdown перед парсингом ===
                                 cleaned_raw_json = clean_json_text(api_res.text)
                                 data = json.loads(cleaned_raw_json)
                                 
