@@ -143,6 +143,23 @@ def clear_profile_widget_keys():
     for k in keys_to_clear:
         del st.session_state[k]
 
+def is_valid_profiles_dict(data):
+    """Проверяет, является ли JSON словарем профилей, а не credentials.json"""
+    if not isinstance(data, dict) or len(data) == 0:
+        return False
+    
+    # Ключи, характерные для Google Service Account (credentials.json)
+    service_account_keys = {"type", "project_id", "private_key_id", "private_key", "client_email"}
+    if service_account_keys.issubset(data.keys()):
+        return False
+    
+    # Проверяем, что значения профилей — это словари
+    for profile_name, profile_content in data.items():
+        if not isinstance(profile_content, dict):
+            return False
+            
+    return True
+
 # === БЛОК РАБОТЫ С НАСТРОЙКАМИ И ПРОФИЛЯМИ ===
 CONFIGS_FILE = "app_profiles.json"
 
@@ -250,7 +267,7 @@ def load_profiles_cloud_or_local():
             val = ws.cell(1, 1).value
             if val:
                 data = json.loads(val)
-                if isinstance(data, dict) and len(data) > 0:
+                if is_valid_profiles_dict(data):
                     return data
         except Exception:
             pass
@@ -258,7 +275,9 @@ def load_profiles_cloud_or_local():
     if os.path.exists(CONFIGS_FILE):
         try:
             with open(CONFIGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if is_valid_profiles_dict(data):
+                    return data
         except Exception:
             pass
 
@@ -266,6 +285,9 @@ def load_profiles_cloud_or_local():
 
 def save_profiles_cloud_and_local(profiles_data):
     """Сохранение профилей локально + дублирование на Google Диск."""
+    if not is_valid_profiles_dict(profiles_data):
+        return
+        
     st.session_state["profiles"] = profiles_data
     try:
         with open(CONFIGS_FILE, "w", encoding="utf-8") as f:
@@ -394,7 +416,7 @@ uploaded_profiles_backup = st.sidebar.file_uploader(
 if uploaded_profiles_backup is not None:
     try:
         imported_data = json.load(uploaded_profiles_backup)
-        if isinstance(imported_data, dict) and len(imported_data) > 0:
+        if is_valid_profiles_dict(imported_data):
             save_profiles_cloud_and_local(imported_data)
             clear_profile_widget_keys()
             st.session_state["selected_profile"] = list(imported_data.keys())[0]
@@ -402,7 +424,7 @@ if uploaded_profiles_backup is not None:
             time.sleep(1)
             st.rerun()
         else:
-            st.sidebar.error("Файл содержит неверную структуру JSON!")
+            st.sidebar.error("Ошибка: загруженный файл не является файлом профилей! (Возможно, выбран credentials.json)")
     except Exception as err:
         st.sidebar.error(f"Ошибка при чтении JSON: {err}")
 
