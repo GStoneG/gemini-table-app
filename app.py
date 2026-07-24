@@ -640,104 +640,110 @@ if st.session_state["processing"]:
                 
                 log(f"[{row_number}/{total_rows}] Скачивание: {download_url[:50]}...")
                 
-                try:
-                    # ПОТОКОВОЕ СКАЧИВАНИЕ С ОГРАНИЧЕНИЕМ ПО РАЗМЕРУ В 15 МБ
-                    res = requests.get(download_url, headers={'User-Agent': 'Mozilla/5.0'}, stream=True, timeout=20)
-                    
-                    if res.status_code == 200:
-                        content_length = res.headers.get('content-length')
-                        if content_length and int(content_length) > 15 * 1024 * 1024:
-                            raise Exception("Файл слишком большой (размер по заголовку > 15MB)")
-                            
-                        pdf_bytes = bytearray()
-                        for chunk in res.iter_content(chunk_size=16384):
-                            if not st.session_state["processing"]:
-                                break
-                            pdf_bytes.extend(chunk)
-                            if len(pdf_bytes) > 15 * 1024 * 1024:
-                                raise Exception("Размер файла превысил предел в 15MB при загрузке")
-                        
-                        if not pdf_bytes.startswith(b'%PDF'):
-                            try:
-                                sample_text = pdf_bytes[:500].decode('utf-8', errors='ignore')
-                                if "<html" in sample_text.lower() or "<!doctype" in sample_text.lower():
-                                    raise Exception("Сайт вернул страницу блокировки (HTML) вместо файла PDF")
-                            except Exception:
-                                pass
-                            raise Exception("Загруженный файл не является валидным PDF")
-
-                        log(f"-> Скачано ({len(pdf_bytes) / (1024 * 1024):.2f} МБ). Отправка в Gemini API...")
-                        
-                        for attempt in range(3):
-                            if not st.session_state["processing"]:
-                                break
-
-                            try:
-                                api_res = model.generate_content([
-                                    {'mime_type': 'application/pdf', 'data': bytes(pdf_bytes)}, 
-                                    prompt_text
-                                ], 
-                                generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
-                                request_options={"timeout": 120}
-                                )
-                                
-                                log("-> Ответ от Gemini получен. Парсинг...")
-                                
-                                cleaned_raw_json = clean_json_text(api_res.text)
-                                data = json.loads(cleaned_raw_json)
-                                
-                                # === УНИВЕРСАЛЬНОЕ ФОРМАТИРОВАНИЕ ВЫВОДА ===
-                                if isinstance(data, dict) and output_template.strip():
-                                    try:
-                                        keys_needed = re.findall(r'\{(.*?)\}', output_template)
-                                        format_dict = {k: data.get(k, "—") for k in keys_needed}
-                                        formatted_str = output_template.format(**format_dict)
-                                    except Exception as format_err:
-                                        log(f"Предупреждение: не удалось отформатировать по шаблону ({format_err}). Вывод в сыром виде.")
-                                        formatted_str = str(data)
-                                else:
-                                    formatted_str = "; ".join([f"{k}: {v}" for k, v in data.items()]) if isinstance(data, dict) else str(data)
-                                
-                                # Запись в Google Таблицу
-                                log("-> Запись результата в Google Таблицу...")
-                                sheet.update_cell(row_number, out_column, formatted_str)
-                                log(f"-> Строка {row_number}: Успешно записано: {formatted_str[:60]}...")
-                                request_count += 1
-                                break
-                            except Exception as api_err:
-                                if "429" in str(api_err):
-                                    wait_time = (2 ** attempt) * 20
-                                    log(f"Превышен лимит (429)! Ожидание {wait_time} сек...")
-                                    time.sleep(wait_time)
-                                else:
-                                    log(f"Ошибка Gemini / JSON: {api_err}")
-                                    sheet.update_cell(row_number, out_column, f"Ошибка API/JSON: {str(api_err)[:100]}")
-                                    break
-                                    
-                        if request_count > 0 and request_count % 10 == 0:
-                            log("Плановая пауза 60 секунд для защиты лимитов...")
-                            time.sleep(60)
-                        else:
-                            time.sleep(5)
-                    else:
-                        error_msg = f"Ошибка загрузки: код сервера {res.status_code}"
-                        log(f"-> {error_msg}")
-                        sheet.update_cell(row_number, out_column, error_msg)
-                        time.sleep(5)
-                except Exception as row_err:
-                    error_msg = f"Ошибка: {row_err}"
-                    log(f"-> {error_msg}")
+                # === ДОБАВЛЕННЫЙ БЛОК ПОВТОРНЫХ ПОПЫТОК (RETRY) ДЛЯ СКАЧИВАНИЯ ===
+                pdf_bytes = None
+                for dl_attempt in range(3):
+                    if not st.session_state["processing"]:
+                        break
                     try:
-                        sheet.update_cell(row_number, out_column, f"Ошибка обработки: {str(row_err)[:100]}")
-                    except Exception as sheet_err:
-                        log(f"Не удалось записать статус ошибки в таблицу: {sheet_err}")
+                        # ПОТОКОВОЕ СКАЧИВАНИЕ С ОГРАНИЧЕНИЕМ ПО РАЗМЕРУ В 15 МБ
+                        res = requests.get(download_url, headers={'User-Agent': 'Mozilla/5.0'}, stream=True, timeout=20)
+                        
+                        if res.status_code == 200:
+                            content_length = res.headers.get('content-length')
+                            if content_length and int(content_length) > 15 * 1024 * 1024:
+                                raise Exception("Файл слишком большой (размер по заголовку > 15MB)")
+                                
+                            temp_bytes = bytearray()
+                            for chunk in res.iter_content(chunk_size=16384):
+                                if not st.session_state["processing"]:
+                                    break
+                                temp_bytes.extend(chunk)
+                                if len(temp_bytes) > 15 * 1024 * 1024:
+                                    raise Exception("Размер файла превысил предел в 15MB при загрузке")
+                            
+                            if not temp_bytes.startswith(b'%PDF'):
+                                try:
+                                    sample_text = temp_bytes[:500].decode('utf-8', errors='ignore')
+                                    if "<html" in sample_text.lower() or "<!doctype" in sample_text.lower():
+                                        raise Exception("Сайт вернул страницу блокировки (HTML) вместо файла PDF")
+                                except Exception:
+                                    pass
+                                raise Exception("Загруженный файл не является валидным PDF")
+                            
+                            pdf_bytes = temp_bytes
+                            break
+                        else:
+                            raise Exception(f"код сервера {res.status_code}")
+                    except Exception as dl_err:
+                        if dl_attempt < 2:
+                            wait_time = (2 ** dl_attempt) * 3
+                            log(f"⚠️ Ошибка скачивания ({dl_err}). Повтор через {wait_time} сек... (Попытка {dl_attempt + 1}/3)")
+                            time.sleep(wait_time)
+                        else:
+                            log(f"❌ Ошибка скачивания после 3 попыток: {dl_err}")
+                
+                if not pdf_bytes:
+                    continue
+                # ==============================================================
+
+                log(f"-> Скачано ({len(pdf_bytes) / (1024 * 1024):.2f} МБ). Отправка в Gemini API...")
+                
+                for attempt in range(3):
+                    if not st.session_state["processing"]:
+                        break
+
+                    try:
+                        api_res = model.generate_content([
+                            {'mime_type': 'application/pdf', 'data': bytes(pdf_bytes)}, 
+                            prompt_text
+                        ], 
+                        generation_config=genai.types.GenerationConfig(response_mime_type="application/json"),
+                        request_options={"timeout": 120}
+                        )
+                        
+                        log("-> Ответ от Gemini получен. Парсинг...")
+                        
+                        cleaned_raw_json = clean_json_text(api_res.text)
+                        data = json.loads(cleaned_raw_json)
+                        
+                        # === УНИВЕРСАЛЬНОЕ ФОРМАТИРОВАНИЕ ВЫВОДА ===
+                        if isinstance(data, dict) and output_template.strip():
+                            try:
+                                keys_needed = re.findall(r'\{(.*?)\}', output_template)
+                                format_dict = {k: data.get(k, "—") for k in keys_needed}
+                                formatted_str = output_template.format(**format_dict)
+                            except Exception as format_err:
+                                log(f"Предупреждение: не удалось отформатировать по шаблону ({format_err}). Вывод в сыром виде.")
+                                formatted_str = str(data)
+                        else:
+                            formatted_str = "; ".join([f"{k}: {v}" for k, v in data.items()]) if isinstance(data, dict) else str(data)
+                        
+                        # Запись в Google Таблицу
+                        log("-> Запись результата в Google Таблицу...")
+                        sheet.update_cell(row_number, out_column, formatted_str)
+                        log(f"-> Строка {row_number}: Успешно записано: {formatted_str[:60]}...")
+                        request_count += 1
+                        break
+                    except Exception as api_err:
+                        if "429" in str(api_err):
+                            wait_time = (2 ** attempt) * 20
+                            log(f"Превышен лимит (429)! Ожидание {wait_time} сек...")
+                            time.sleep(wait_time)
+                        else:
+                            log(f"Ошибка Gemini / JSON: {api_err}")
+                            sheet.update_cell(row_number, out_column, f"Ошибка API/JSON: {str(api_err)[:100]}")
+                            break
+                            
+                if request_count > 0 and request_count % 10 == 0:
+                    log("Плановая пауза 60 секунд для защиты лимитов...")
+                    time.sleep(60)
+                else:
                     time.sleep(5)
-                    
-        if st.session_state["processing"]:
-            st.success("🎉 Обработка выбранных строк/таблицы успешно завершена!")
-            st.session_state["processing"] = False
-            st.rerun()
-            
-    except Exception as glob_err:
-        st.error(f"Глобальная ошибка при чтении таблицы: {glob_err}")
+            else:
+                error_msg = f"Ошибка загрузки: код сервера {res.status_code}"
+                log(f"-> {error_msg}")
+    except Exception as outer_err:
+        log(f"Критическая ошибка цикла: {outer_err}")
+    finally:
         st.session_state["processing"] = False
