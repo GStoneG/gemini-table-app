@@ -741,8 +741,8 @@ if st.session_state["processing"]:
                 else:
                     time.sleep(5)
             else:
-                error_msg = f"Ошибка загрузки: код сервера {res.status_code}"
-                log(f"-> {error_msg}")
+                if target_rows:
+                    log(f"⚠️ Строка {row_number}: пустая ячейка со ссылкой (колонка {url_column}), пропуск.")
     except Exception as outer_err:
         log(f"Критическая ошибка цикла: {outer_err}")
     finally:
