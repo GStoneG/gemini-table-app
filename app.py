@@ -600,6 +600,7 @@ if st.session_state["processing"]:
         all_rows = sheet.get_values(value_render_option='FORMULA')
         total_rows = len(all_rows)
         request_count = 0
+        fatal_api_error = False
         
         target_rows = parse_target_rows(target_rows_input)
         if target_rows:
@@ -730,11 +731,19 @@ if st.session_state["processing"]:
                             wait_time = (2 ** attempt) * 20
                             log(f"Превышен лимит (429)! Ожидание {wait_time} сек...")
                             time.sleep(wait_time)
+                        elif "403" in str(api_err) or "401" in str(api_err):
+                            # Ошибка доступа к API: нет смысла продолжать и засорять таблицу
+                            log(f"⛔ Доступ к Gemini API запрещён ({api_err}). Обработка остановлена, в таблицу ничего не записано.")
+                            fatal_api_error = True
+                            break
                         else:
                             log(f"Ошибка Gemini / JSON: {api_err}")
                             sheet.update_cell(row_number, out_column, f"Ошибка API/JSON: {str(api_err)[:100]}")
                             break
-                            
+
+                if fatal_api_error:
+                    break
+
                 if request_count > 0 and request_count % 10 == 0:
                     log("Плановая пауза 60 секунд для защиты лимитов...")
                     time.sleep(60)
