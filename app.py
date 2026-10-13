@@ -171,7 +171,7 @@ DEFAULT_PROFILES = {
         "url_column": "AU",
         "out_column": "S",
         "target_rows": "",
-        "model_name": "gemini-2.5-flash",
+        "model_name": "gemini-3.8-flash",
         "output_template": "Партнер - {partner}",
         "system_prompt": (
             "Ты — специализированный ИИ-аналитик по аудиту тендерной документации и спецификаций.\n\n"
@@ -203,7 +203,7 @@ DEFAULT_PROFILES = {
         "url_column": "AU",
         "out_column": "S",
         "target_rows": "",
-        "model_name": "gemini-2.5-flash",
+        "model_name": "gemini-3.8-flash",
         "output_template": "Тип: {type}; CPU: {cpu}; RAM: {ram}; SSD/HDD: {storage}; GPU: {gpu}; Экран: {screen}; ОС: {os}; Дополнительные программы: {po}; Периферия: {peripherals}",
         "system_prompt": (
             "Ты — первоклассный эксперт по компьютерному аппаратному обеспечению и архитектуре процессоров. "
@@ -501,7 +501,7 @@ with col2:
 url_column = col2num(url_col_input)
 out_column = col2num(out_col_input)
 
-model_options = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+model_options = ["gemini-3.8-flash"]
 saved_model = active_config.get("model_name")
 model_index = model_options.index(saved_model) if saved_model in model_options else 0
 model_name = st.selectbox("Версия модели Gemini", model_options, index=model_index, key=f"model_name_{selected_profile}")
